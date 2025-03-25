@@ -1,4 +1,7 @@
 import os
+from dotenv import load_dotenv
+
+load_dotenv(override=True)  # Load environment variables
 
 # Firestore settings
 FIRESTORE_COLLECTION = os.getenv("FIRESTORE_COLLECTION", "cacheConfigs")
@@ -7,8 +10,9 @@ ACTIVE_CACHE_FIELD=os.getenv("ACTIVE_CACHE_FIELD", "activeCache")
 PREVIOUS_CACHE_FIELD=os.getenv("PREVIOUS_CACHE_FIELD", "previousCache")
 TRANSITION_UNTIL_FIELD=os.getenv("TRANSITION_UNTIL_FIELD", "transitionUntil")
 UPDATED_AT_FIELD=os.getenv("UPDATED_AT_FIELD", "updatedAt")
-GCP_PROJECT_ID=os.getenv("GCP_PROJECT_ID", "")
-SERVICE_ACCOUNT_SECRET_ID=os.getenv("SERVICE_ACCOUNT_SECRET_ID", "")
+GCP_PROJECT_ID=os.getenv("GCP_PROJECT_ID")
+SERVICE_ACCOUNT_SECRET_ID=os.getenv("SERVICE_ACCOUNT_SECRET_ID")
+SERVICE_ACCOUNT_SECRET_NAME=os.getenv("SERVICE_ACCOUNT_SECRET_NAME")
 
 # System prompt settings in Firestore
 SYSTEM_PROMPT_DOC_PATH = os.getenv("SYSTEM_PROMPT_DOC_PATH","")

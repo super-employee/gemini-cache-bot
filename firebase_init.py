@@ -1,20 +1,21 @@
 import json
-import os
 from google.cloud import secretmanager
 from firebase_admin import credentials, initialize_app
-from config import GCP_PROJECT_ID, SERVICE_ACCOUNT_SECRET_ID
+from config import GCP_PROJECT_ID, SERVICE_ACCOUNT_SECRET_ID, SERVICE_ACCOUNT_SECRET_NAME
 
-def get_service_account_info(project_id, secret_id):
+def get_service_account_info(secret_id, secret_name):
     client = secretmanager.SecretManagerServiceClient()
-    name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
+    print(secret_id)
+    print(secret_name)
+    name = f"projects/{secret_id}/secrets/{secret_name}/versions/latest"
     response = client.access_secret_version(name=name)
     secret_string = response.payload.data.decode("UTF-8")
     return json.loads(secret_string)
 
 def init_firebase():
-    project_id = os.getenv(GCP_PROJECT_ID)
-    secret_id = os.getenv(SERVICE_ACCOUNT_SECRET_ID)
-    service_account_info = get_service_account_info(project_id, secret_id)
+    secret_id = SERVICE_ACCOUNT_SECRET_ID
+    secret_name = SERVICE_ACCOUNT_SECRET_NAME
+    service_account_info = get_service_account_info(secret_id, secret_name)
     cred = credentials.Certificate(service_account_info)
     initialize_app(cred)
 
