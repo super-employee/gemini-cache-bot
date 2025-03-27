@@ -1,11 +1,5 @@
 import os
 import logging
-from dotenv import load_dotenv
-
-# Load environment variables from .env file, primarily for local development.
-# In production, prefer injecting environment variables directly.
-# override=False prevents .env from overriding existing system env vars.
-load_dotenv(override=False)
 
 # --- Environment Variable Helper ---
 def get_env_variable(var_name, default=None, required=False):

@@ -15,7 +15,3 @@ gunicorn>=21.2.0,<22.0.0 # Updated version range
 
 # Google Cloud Secret Manager Client
 google-cloud-secret-manager>=2.16.0,<3.0.0 # Seems relatively recent, check if update needed
-
-# python-dotenv for local development environment variables
-# Consider removing from production build if env vars are injected externally
-python-dotenv>=1.0.0,<2.0.0 # Updated version range
