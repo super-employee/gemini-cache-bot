@@ -53,3 +53,5 @@ var/
 
 # Others
 *.DS_Store
+inventory-data.txt
+inventory-test.txt

@@ -2,6 +2,9 @@ import json
 from google.cloud import secretmanager
 from firebase_admin import credentials, initialize_app
 from config import SERVICE_ACCOUNT_SECRET_ID, SERVICE_ACCOUNT_SECRET_NAME
+from logger_config import setup_logger
+
+logger = setup_logger(__name__)
 
 def get_service_account_info(secret_id, secret_name):
     client = secretmanager.SecretManagerServiceClient()
@@ -16,6 +19,7 @@ def init_firebase():
     service_account_info = get_service_account_info(secret_id, secret_name)
     cred = credentials.Certificate(service_account_info)
     initialize_app(cred)
+    logger.info("Firebase initialized successfully.")
 
 # Initialize Firebase when this module is imported
 init_firebase()

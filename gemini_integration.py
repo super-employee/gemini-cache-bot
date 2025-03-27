@@ -3,13 +3,16 @@ from vertexai.preview import caching
 from vertexai.preview.generative_models import GenerativeModel
 from config import GEMINI_MODEL_NAME, CACHE_TTL, GCP_PROJECT_ID, VERTEX_AI_REGION, CACHE_EXTENSION_DURATION
 from datetime import timedelta
+from logger_config import setup_logger
+
+logger = setup_logger(__name__)
 
 # Initialize Vertex AI for the given project and location.
 vertexai.init(project=GCP_PROJECT_ID, location=VERTEX_AI_REGION)
 
 def create_cache(system_instruction, contents):
     """
-    Create a new Gemini context cache using the given system instruction and inventory_data.
+    Create a new Gemini context cache using the given system instruction and inventory data.
     """
     new_cache = caching.CachedContent.create(
         model_name=GEMINI_MODEL_NAME,
@@ -28,9 +31,9 @@ def instantiate_model_from_cache(cache_ref):
 
 def extend_cache_expiration(cache_ref):
     """
-    Extends cache expiration date
+    Extend cache expiration date.
     """
-    # Update the context cache using TTL (Time to live)
     cached_content = caching.CachedContent(cached_content_name=cache_ref)
     cached_content.update(ttl=timedelta(seconds=int(CACHE_EXTENSION_DURATION)))
     cached_content.refresh()
+    logger.info("Gemini cache expiration extended for cache_ref: %s", cache_ref)
