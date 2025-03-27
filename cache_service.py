@@ -1,55 +1,80 @@
 import datetime
 from datetime import timezone, timedelta
-from config import TRANSITION_PERIOD_SECONDS, CACHE_TTL, ACTIVE_CACHE_FIELD, PREVIOUS_CACHE_FIELD, TRANSITION_UNTIL_FIELD
+from config import ACTIVE_CACHE_FIELD, EXPIRES_AT_FIELD
 import repository
 import gemini_integration
+from vertexai.generative_models import Part
 
 def create_new_cache(inventory_data):
     """
     Create a new Gemini cache using updated inventory data.
-    Retrieves the system prompt template from Firestore, replaces the placeholder
-    "${inventory_data}" with the provided inventory data, and creates a new cache.
+    Retrieves the system prompt template from Firestore and creates a new cache.
     """
-    prompt_template = repository.get_system_prompt()
-    if prompt_template is None:
+    system_instruction = repository.get_system_prompt()
+    if system_instruction is None:
         # Fallback prompt if not found in Firestore
-        prompt_template = (
+        system_instruction = (
             "You are a customer support chatbot. Use the following inventory information to answer questions:\n"
             "${inventory_data}"
         )
-    # Replace the placeholder with actual inventory data
-    system_instruction = prompt_template.replace("${inventory_data}", inventory_data)
+
+    # Build the contents as a Content object.
+    system_part = Part.from_text(text=system_instruction)
+    content_part = Part.from_text(text=inventory_data)
     
+    print("[DEBUG] Creating cache...")
     new_cache_ref = gemini_integration.create_cache(
-        system_instruction=system_instruction,
-        ttl=CACHE_TTL
+        system_instruction=system_part,
+        contents=content_part,
     )
+    print("[DEBUG] Cache created.")
+
     return new_cache_ref
 
-def update_active_cache(new_inventory_data):
+def update_active_cache():
     """
     Update the active cache by creating a new cache and saving the current one as previous.
     """
-    new_cache_ref = create_new_cache(new_inventory_data)
+    inventory_data = repository.get_inventory_data()
+    new_cache_ref = create_new_cache(inventory_data)
     current_config = repository.get_cache_config()
-    previous_cache = current_config.get(ACTIVE_CACHE_FIELD) if current_config else None
-    transition_until = datetime.datetime.now(timezone.utc) + timedelta(seconds=TRANSITION_PERIOD_SECONDS)
-    repository.update_cache_config(active_cache=new_cache_ref, previous_cache=previous_cache, transition_until=transition_until)
+    repository.update_cache_config(
+        active_cache=new_cache_ref,
+    )
     return new_cache_ref
 
 def get_active_cache():
     """
-    Determine which cache to use based on the transition period.
+    Determine which cache to use based on the transition period and expiration.
+    If the active cache has expired, update the active cache first.
     """
     config = repository.get_cache_config()
     if not config:
         return None
+
     active_cache = config.get(ACTIVE_CACHE_FIELD)
-    previous_cache = config.get(PREVIOUS_CACHE_FIELD)
-    transition_until_str = config.get(TRANSITION_UNTIL_FIELD)
-    if transition_until_str:
-        transition_until = datetime.datetime.fromisoformat(transition_until_str)
-        current_time = datetime.datetime.now(timezone.utc)
-        if current_time < transition_until and previous_cache:
-            return previous_cache
+    expires_at_str = config.get(EXPIRES_AT_FIELD)
+    current_time = datetime.datetime.now(timezone.utc)
+
+    # If there's an expiration time and it has passed, update the active cache.
+    if expires_at_str:
+        expires_at = datetime.datetime.fromisoformat(expires_at_str)
+        if current_time >= expires_at:
+            # Cache expired, update and return new active cache.
+            print("[DEBUG] Cache expired...updating...")
+            return update_active_cache()
+
     return active_cache
+
+def extend_cache_expiration(new_expires_at, cache_ref):
+    gemini_integration.extend_cache_expiration(cache_ref=cache_ref)
+    repository.extend_cache_expiration(new_expires_at=new_expires_at)
+
+
+# every time send message, updates expires_at and remove previous_cache if it's expired_at already passed
+
+# ask chat if every should be in one db or each client should have their own seperate db
+
+# add to system prompt to check if inventory is gone
+
+# actually extend the cache expiration of the gemini
