@@ -1,10 +1,10 @@
 import datetime
 from datetime import timezone, timedelta
-from config import ACTIVE_CACHE_FIELD, EXPIRES_AT_FIELD
-import repository
-import gemini_integration
+from config.config import ACTIVE_CACHE_FIELD, EXPIRES_AT_FIELD
+import services.repository as repository
+import services.gemini_integration as gemini_integration
 from vertexai.generative_models import Part
-from logger_config import setup_logger
+from config.logger_config import setup_logger
 
 logger = setup_logger(__name__)
 

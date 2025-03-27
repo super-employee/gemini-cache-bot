@@ -1,8 +1,8 @@
 import json
 from google.cloud import secretmanager
 from firebase_admin import credentials, initialize_app
-from config import SERVICE_ACCOUNT_SECRET_ID, SERVICE_ACCOUNT_SECRET_NAME
-from logger_config import setup_logger
+from config.config import SERVICE_ACCOUNT_SECRET_ID, SERVICE_ACCOUNT_SECRET_NAME
+from config.logger_config import setup_logger
 
 logger = setup_logger(__name__)
 

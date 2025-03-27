@@ -3,12 +3,12 @@ import time
 import datetime
 from datetime import timezone, timedelta
 from flask import Flask, request, jsonify
-from logger_config import setup_logger
-import cache_service
-import gemini_integration
-import firebase_init  # Ensures Firebase is initialized
-import repository
-from config import EXPIRES_AT_FIELD, CACHE_EXTENSION_THRESHOLD, CACHE_EXTENSION_DURATION, ACTIVE_CACHE_FIELD
+from config.logger_config import setup_logger
+import services.cache_service as cache_service
+import services.gemini_integration as gemini_integration
+import initializers.firebase_init as firebase_init  # Ensures Firebase is initialized
+import services.repository as repository
+from config.config import EXPIRES_AT_FIELD, CACHE_EXTENSION_THRESHOLD, CACHE_EXTENSION_DURATION, ACTIVE_CACHE_FIELD
 
 logger = setup_logger(__name__)
 

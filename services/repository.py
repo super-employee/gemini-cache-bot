@@ -1,7 +1,7 @@
 import datetime
 from datetime import timezone, timedelta
 from firebase_admin import firestore
-from config import (
+from config.config import (
     ACTIVE_CACHE_FIELD, 
     UPDATED_AT_FIELD,
     EXPIRES_AT_FIELD,
@@ -12,8 +12,8 @@ from config import (
     INVENTORY_DATA_DOC_PATH,
     INVENTORY_DATA_FIELD
 )
-import firebase_init  # Ensures Firebase is initialized
-from logger_config import setup_logger
+import initializers.firebase_init as firebase_init  # Ensures Firebase is initialized
+from config.logger_config import setup_logger
 
 logger = setup_logger(__name__)
 

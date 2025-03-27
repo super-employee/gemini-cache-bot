@@ -1,9 +1,9 @@
 import vertexai
 from vertexai.preview import caching
 from vertexai.preview.generative_models import GenerativeModel
-from config import GEMINI_MODEL_NAME, CACHE_TTL, GCP_PROJECT_ID, VERTEX_AI_REGION, CACHE_EXTENSION_DURATION
+from config.config import GEMINI_MODEL_NAME, CACHE_TTL, GCP_PROJECT_ID, VERTEX_AI_REGION, CACHE_EXTENSION_DURATION
 from datetime import timedelta
-from logger_config import setup_logger
+from config.logger_config import setup_logger
 
 logger = setup_logger(__name__)
 
