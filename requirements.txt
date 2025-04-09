@@ -1,0 +1,16 @@
+# Flask framework and WSGI utilities
+Flask>=2.2.0,<3.0.0 # Updated version range
+Werkzeug>=2.2.0,<3.0.0 # Updated version range matching Flask
+
+# Firebase Admin SDK
+firebase-admin>=6.1.0,<7.0.0 # Updated version range
+
+# Google GenAI SDK
+google-genai==1.9.0 # Pinned to current latest version
+google-api-core>=2.10.0,<3.0.0 # Often needed for exceptions like ResourceExhausted
+
+# WSGI Server for production
+gunicorn>=21.2.0,<22.0.0 # Updated version range
+
+# Google Cloud Secret Manager Client
+google-cloud-secret-manager>=2.16.0,<3.0.0 # Seems relatively recent, check if update needed
