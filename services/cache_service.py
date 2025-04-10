@@ -14,6 +14,9 @@ from google.api_core import exceptions as google_exceptions
 from google import genai
 from google.genai import types
 
+# Import the function declaration from gemini_integration
+from services.gemini_integration import REQUEST_COLLEAGUE_HELP_DECLARATION
+
 logger = setup_logger(__name__, level=LOG_LEVEL)
 
 # Define custom exceptions for clarity
@@ -27,26 +30,24 @@ class CacheResponseError(Exception):
 
 def _create_new_gemini_cache(inventory_data: str) -> str:
     """
-    Creates a new Gemini cache with system prompt and inventory data.
-
-    Args:
-        inventory_data: The inventory data string.
-
-    Returns:
-        The name (resource ID) of the newly created Gemini cache.
-
-    Raises:
-        repository.SystemPromptError: If the system prompt cannot be retrieved.
-        gemini_integration.CacheCreationError: If Gemini cache creation fails.
+    Creates a new Gemini cache with system prompt, inventory data, and defined tools.
     """
     logger.info("Preparing to create a new Gemini cache.")
     try:
         system_instruction_text = repository.get_system_prompt()
         if system_instruction_text is None:
-            logger.error(f"System prompt not found in Firestore.")
+            logger.error("System prompt not found in Firestore. Cannot create cache.")
+            raise repository.SystemPromptError("System prompt not found, cannot create cache.")
     except Exception as e:
         logger.error(f"Failed to retrieve system prompt: {e}")
         raise repository.SystemPromptError("Could not retrieve system prompt for cache creation.") from e
+
+    # --- Define the Tools to be included in the cache ---
+    call_friend_tool = types.Tool(
+        function_declarations=[REQUEST_COLLEAGUE_HELP_DECLARATION]
+    )
+    tools_list = [call_friend_tool]
+    logger.info("Defining tools to be included in the new cache.")
 
     logger.info("Calling Gemini API to create cache...")
     try:
@@ -54,15 +55,15 @@ def _create_new_gemini_cache(inventory_data: str) -> str:
             model_name=GEMINI_MODEL_NAME,
             system_instruction=system_instruction_text,
             inventory_data=inventory_data,
-            ttl_seconds=CACHE_TTL_SECONDS # Pass TTL during creation
+            ttl_seconds=CACHE_TTL_SECONDS,
+            tools=tools_list # <-- Pass the defined tools here
         )
         logger.info("Successfully created new Gemini cache: %s", new_cache_ref)
         return new_cache_ref
+    # ... (exception handling remains the same) ...
     except Exception as e:
-        # Catch specific Gemini/Vertex errors if possible
         logger.error(f"Gemini cache creation failed: {e}", exc_info=True)
         raise gemini_integration.CacheCreationError("Gemini API call failed during cache creation.") from e
-
 
 def force_update_active_cache() -> str:
     """
@@ -107,21 +108,45 @@ def force_update_active_cache() -> str:
         logger.exception("An unexpected error occurred during forced cache update.")
         raise CacheUpdateError("Unexpected error during forced cache update.") from e
 
-def generate_content_from_cache(user_prompt: str) -> str:
+def generate_content_from_cache(user_prompt: str) -> types.GenerateContentResponse:
+    """
+    Gets the active cache and calls Gemini to generate content using that cache.
+    The cache already contains system instructions and tools.
+    Handles the function calling loop internally via gemini_integration.
+    """
     active_cache_ref = get_or_update_active_cache()
     if not active_cache_ref:
         logger.error("Active cache reference is None. Cannot generate content.")
         raise CacheResponseError("Active cache reference is None. Cannot generate content.")
+
     try:
-        return gemini_integration.generate_content_with_cache(
-        model_name=GEMINI_MODEL_NAME,
-        cache_name=active_cache_ref,
-        user_prompt=user_prompt,
-    )
+        # --- Define the Tools ---
+        # REMOVED: Tools are no longer defined here, they are in the cache.
+        # call_friend_tool = types.Tool(...)
+        # tools_list = [call_friend_tool]
+
+        # --- Call Gemini Integration (which now handles the function call loop) ---
+        response = gemini_integration.generate_content_with_cache(
+            model_name=GEMINI_MODEL_NAME, # Still need model name for the call
+            cache_name=active_cache_ref,
+            user_prompt=user_prompt
+            # tools=tools_list # <-- REMOVE passing tools here
+        )
+        return response
+
+    # ... (exception handling remains the same) ...
+    except gemini_integration.GenAIGenerationError as e:
+        logger.error(f"Error generating content from cache via Gemini: {e}")
+        raise CacheResponseError(f"AI generation failed: {e}") from e
+    except gemini_integration.CacheInteractionError as e:
+         logger.error(f"Error interacting with Gemini cache '{active_cache_ref}': {e}")
+         raise CacheResponseError(f"AI cache interaction failed: {e}") from e
     except Exception as e:
         logger.exception("An unexpected error occurred while trying to generate content from cache.")
+        if isinstance(e, google_exceptions.ResourceExhausted):
+            raise
         raise CacheResponseError("Unexpected error during content generation from cache.") from e
-
+    
 def get_or_update_active_cache() -> Optional[str]:
     """
     Retrieves the active cache reference from Firestore. If the cache is

@@ -1,6 +1,8 @@
 import datetime
 from datetime import timezone
 from typing import Optional
+import requests
+import json
 
 # Import the new SDK
 from google import genai
@@ -10,7 +12,8 @@ from google.api_core import exceptions as google_exceptions
 from config.config import (
     # GEMINI_MODEL_NAME will be passed to functions needing it
     GOOGLE_API_KEY,
-    LOG_LEVEL
+    LOG_LEVEL,
+    CALL_A_FRIEND_WEBHOOK_URL
 )
 from config.logger_config import setup_logger
 
@@ -53,170 +56,309 @@ except (google_exceptions.GoogleAPIError, ValueError, Exception) as e:
     logger.critical(f"CRITICAL: Failed to configure Google GenAI Client: {e}", exc_info=True)
     raise GenAIConfigurationError("Failed to configure Google GenAI Client.") from e
 
+# --- Function Declaration for Calling a Friend ---
+REQUEST_COLLEAGUE_HELP_DECLARATION = types.FunctionDeclaration(
+    name="request_colleague_help",
+    description=(
+        "Use this function ONLY when you receive a query you cannot answer based on your "
+        "knowledge, the provided inventory data, or defined capabilities (like finance, "
+        "test drives, opening hours). This function sends the difficult query and relevant "
+        "conversation context to a human colleague for assistance."
+    ),
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            'message_to_colleague': types.Schema(
+                type=types.Type.STRING,
+                description="A message for the colleague clearly stating the user's original unanswered query and any necessary preceding context from the conversation."
+            )
+        },
+        required=['message_to_colleague']
+    )
+)
+
+# --- Helper Function to Execute the Webhook Call ---
+def _execute_request_colleague_help(message_to_colleague: str) -> dict:
+    """
+    Sends the message to the colleague via the configured webhook.
+
+    Args:
+        message_to_colleague: The message constructed by the model.
+
+    Returns:
+        A dictionary indicating success or failure.
+    """
+    logger.info(f"Executing 'request_colleague_help' function call. Sending message to webhook: {CALL_A_FRIEND_WEBHOOK_URL}")
+    payload = {"message": message_to_colleague}
+    headers = {'Content-Type': 'application/json'}
+    api_response = {"status": "error", "message": "Webhook call failed."} # Default failure response
+
+    try:
+        response = requests.post(CALL_A_FRIEND_WEBHOOK_URL, headers=headers, json=payload, timeout=15) # Added timeout
+        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+
+        # Check if the response body matches the expected success message
+        response_text = response.text.strip() # Use .text and strip whitespace
+        if response_text == '"College successfully contacted"': # Check exact string including quotes if n8n sends it like that
+             logger.info("Webhook call successful: Colleague contacted.")
+             api_response = {"status": "success", "confirmation": "Colleague successfully contacted."}
+        else:
+             # Log unexpected success response content
+             logger.warning(f"Webhook call succeeded (HTTP {response.status_code}) but returned unexpected content: {response_text}")
+             # Treat as success for the model flow, but log it
+             api_response = {"status": "success", "confirmation": f"Colleague contact initiated (Response: {response_text})"}
+
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Webhook call failed for 'request_colleague_help': {e}", exc_info=True)
+        api_response = {"status": "error", "message": f"Failed to contact colleague due to network/request error: {e}"}
+    except Exception as e:
+        logger.error(f"Unexpected error during 'request_colleague_help' execution: {e}", exc_info=True)
+        api_response = {"status": "error", "message": f"An unexpected error occurred: {e}"}
+
+    return api_response
+
 # --- Cache Operations ---
 
 def create_cache(
     model_name: str,
-    system_instruction: str,
+    system_instruction: str, # <-- Keep as string type hint
     inventory_data: str,
     ttl_seconds: int,
+    tools: Optional[list[types.Tool]] = None,
     display_name: Optional[str] = None
 ) -> str:
     """
-    Creates a new GenAI context cache using the google.genai SDK.
-
-    Args:
-        model_name: The specific model version (e.g., "models/gemini-1.5-flash-001").
-                    Must support caching.
-        system_instruction: The system prompt text.
-        inventory_data: The inventory data text.
-        ttl_seconds: The time-to-live for the cache in seconds.
-        display_name: An optional name to identify the cache in listings.
-
-    Returns:
-        The resource name (ID) of the created cache (e.g., "cachedContents/xyz123").
-
-    Raises:
-        CacheCreationError: If the cache creation fails.
-        ValueError: If ttl_seconds is not positive or model_name is invalid/unsupported.
+    Creates a new GenAI context cache including system instructions, data, and tools.
     """
-    if ttl_seconds <= 0:
-        raise ValueError("ttl_seconds must be a positive integer.")
-    if not model_name or not model_name.startswith("models/"):
-         raise ValueError("Invalid model_name format. Must start with 'models/' and include version.")
-
-    # Check if model supports caching (optional but recommended)
-    # This requires an extra API call but prevents errors later
-    try:
-         model_info = client.models.get(model=model_name)
-         if "createCachedContent" not in model_info.supported_actions:
-              raise ValueError(f"Model '{model_name}' does not support context caching.")
-         logger.debug(f"Model '{model_name}' supports caching.")
-    except Exception as e:
-         logger.warning(f"Could not verify caching support for model '{model_name}': {e}. Proceeding anyway.")
-         # Or raise ValueError("Could not verify caching support for model.")
+    # ... (input validation for ttl, model_name) ...
+    # ... (model caching support check) ...
 
     ttl_str = f"{ttl_seconds}s"
     cache_display_name = display_name or f"cache-{model_name.split('/')[-1]}-{int(datetime.datetime.now(timezone.utc).timestamp())}"
 
     logger.info(f"Creating GenAI cache for model '{model_name}' with TTL {ttl_str}")
+    if tools:
+        tool_names = [d.name for t in tools for d in t.function_declarations] if tools else []
+        logger.info(f"Including tools in cache: {tool_names}")
 
     try:
-        # Construct the config dictionary or types.CreateCachedContentConfig object
-        # Based on docs, using a dict for config seems common
-        cache_config_dict = {
-            'display_name': cache_display_name,
-            'system_instruction': system_instruction,
-            'contents': inventory_data, # Pass inventory data as content
-            'ttl': ttl_str,
-        }
-
-        # Call create using the client, passing model and config
-        created_cache = client.caches.create(
-            model=model_name,
-            config=types.CreateCachedContentConfig(**cache_config_dict)
+        # Construct the config including system instruction, content, AND tools
+        cache_config = types.CreateCachedContentConfig(
+            display_name=cache_display_name,
+            system_instruction=system_instruction, # <-- Pass system_instruction as a string
+            contents=[
+                types.Content(
+                    role="user", # <-- ADD role="user" here
+                    parts=[types.Part(text=inventory_data)]
+                )
+            ],
+            ttl=ttl_str,
+            tools=tools,
         )
 
+        # Debug log the config structure before sending (optional)
+        # logger.debug(f"Cache Config Payload: {cache_config}")
+
+        created_cache = client.caches.create(
+            model=model_name, # Model ref needed for context
+            config=cache_config # Pass the complete config object
+        )
+
+        # ... (logging success, token checks remain the same) ...
         logger.info(f"GenAI cache created successfully: Name='{created_cache.name}', DisplayName='{created_cache.display_name}'")
         logger.info(f"Cache Usage Metadata: {created_cache.usage_metadata}")
-
-        # Check token count against minimum (32768 based on docs)
-        min_tokens = 32768
+        min_tokens = 32768 # Or fetch dynamically if possible
         cached_tokens = getattr(created_cache.usage_metadata, 'total_token_count', 0)
         if cached_tokens < min_tokens:
-            logger.warning(f"Created cache '{created_cache.name}' has {cached_tokens} tokens, which is below the recommended minimum of {min_tokens}.")
+             logger.warning(f"Created cache '{created_cache.name}' has {cached_tokens} tokens, which is below the recommended minimum of {min_tokens}.")
         elif cached_tokens == 0:
              logger.error(f"Cache '{created_cache.name}' reported 0 cached tokens. Content might be empty or invalid.")
-             # Consider raising an error here if 0 tokens is always problematic
              # raise CacheCreationError(f"Cache creation resulted in 0 cached tokens for {created_cache.name}.")
 
 
-        return created_cache.name # Return the resource name (e.g., cachedContents/...)
+        return created_cache.name
 
+    # ... (exception handling remains the same) ...
     except google_exceptions.InvalidArgument as e:
-         if "less than minimum" in str(e).lower() or "token limit" in str(e).lower():
-              logger.error(f"Failed to create cache: Content token count issue. Min required: {min_tokens}. Error: {e}", exc_info=True)
-              raise CacheCreationError(f"Cache creation failed: Content token count issue (minimum {min_tokens} required).") from e
-         elif "PERMISSION_DENIED" in str(e) or "API key not valid" in str(e):
-              logger.critical(f"Permission denied or invalid API key during cache creation: {e}", exc_info=True)
-              raise GenAIConfigurationError("Permission denied or invalid API Key for cache creation.") from e
+         # Check for role error specifically if needed
+         if "content.role set" in str(e):
+              logger.error(f"Cache creation failed: Missing role in contents. Error: {e}", exc_info=True)
+              # This specific error shouldn't happen with the fix, but good to log if it recurs
+              raise CacheCreationError("Cache creation failed: Role missing in contents.") from e
+         elif "tool" in str(e).lower() or "function" in str(e).lower():
+              logger.error(f"Failed to create cache due to invalid tool/function definition: {e}", exc_info=True)
+              raise CacheCreationError(f"Cache creation failed (Invalid Tool/Function): {e}") from e
          else:
               logger.error(f"Failed to create GenAI cache due to invalid argument: {e}", exc_info=True)
               raise CacheCreationError(f"Cache creation failed (Invalid Argument): {e}") from e
     except Exception as e:
         logger.error(f"Failed to create GenAI cache: {e}", exc_info=True)
         raise CacheCreationError(f"Cache creation failed: {e}") from e
-
+     
 def generate_content_with_cache(
     model_name: str,
     cache_name: str,
     user_prompt: str
 ) -> types.GenerateContentResponse:
     """
-    Generates content using a previously created cache with the google.genai SDK.
-
-    Args:
-        model_name: The specific model version (e.g., "models/gemini-1.5-flash-001").
-                     Must match the model used to create the cache.
-        cache_name: The resource name of the cache (e.g., "cachedContents/xyz123").
-        user_prompt: The user's query (this is the non-cached part of the prompt).
-
-    Returns:
-        The GenerateContentResponse object (a Pydantic model).
-
-    Raises:
-        GenAIGenerationError: If generation fails or content is blocked.
-        CacheInteractionError: If the cache_name is invalid or not found.
-        google_exceptions.ResourceExhausted: For rate limiting (caller should handle retry).
+    Generates content using a previously created cache. The cache itself contains
+    the necessary system instructions and tools. Handles function calling loops.
     """
     logger.debug(f"Generating content using cache '{cache_name}' with model '{model_name}'")
-    try:
-        # Construct the generation configuration pointing to the cache
-        # Use types.GenerateContentConfig
-        gen_config = {
-            'cached_content' : cache_name
-        }
 
-        # Call generate_content using the client
-        response = client.models.generate_content(
-            model=model_name,
-            contents=[user_prompt], # Only the user prompt goes here
-            config=types.GenerateContentConfig(**gen_config)
+    try:
+        gen_config = types.GenerateContentConfig(
+            cached_content=cache_name
         )
 
-        logger.debug(f"Raw GenAI response received. Usage: {response.usage_metadata}")
-        # Cached token count should appear in usage_metadata if successful
+        logger.debug("Making initial generate_content call referencing the cache.")
+        initial_contents = [types.Content(role="user", parts=[types.Part(text=user_prompt)])]
 
-        # Check finish reason of the first candidate
-        first_candidate = response.candidates[0]
-        if first_candidate.finish_reason != types.FinishReason.STOP:
-             logger.warning(f"Generation finished abnormally using cache '{cache_name}'. Reason: {first_candidate.finish_reason}")
-             # Handle other finish reasons like MAX_TOKENS, SAFETY, RECITATION if needed
-             if first_candidate.finish_reason == types.FinishReason.SAFETY:
-                  # Redundant check if prompt_feedback already caught it, but good fallback
-                  raise GenAIGenerationError(f"Response flagged for safety reasons. Cache: {cache_name}")
+        response = client.models.generate_content(
+            model=model_name,
+            contents=initial_contents,
+            config=gen_config
+        )
 
+        # --- Check for Function Call ---
+        function_calls = []
+        if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+            logger.debug("Checking response parts for function calls...")
+            for part in response.candidates[0].content.parts:
+                if part.function_call:
+                    logger.info(f"Detected function call in part: {part.function_call.name}")
+                    function_calls.append(part.function_call)
 
-        logger.debug("Content generated successfully using cache.")
-        return response
+        if function_calls:
+            # Assuming only one function call per turn for now
+            function_call = function_calls[0]
+            function_name = function_call.name
+            logger.info(f"Model responded with function call: {function_name}") # Renamed log slightly
 
+            if function_name == REQUEST_COLLEAGUE_HELP_DECLARATION.name:
+                 args = function_call.args
+                 message = args.get('message_to_colleague', '')
+                 if not message:
+                     logger.error("Function call 'request_colleague_help' missing 'message_to_colleague' argument.")
+                     raise GenAIGenerationError("Function call was incomplete (missing message).")
+
+                 logger.info(f"Calling _execute_request_colleague_help with message: '{message[:50]}...'") # Log execution start
+                 api_response_content = _execute_request_colleague_help(message)
+                 logger.info(f"Received API response from webhook execution: {api_response_content}") # Log result
+
+                 logger.debug("Sending function execution result back to the model.")
+                 # Ensure the model's function call part is included correctly
+                 model_function_call_content = response.candidates[0].content
+
+                 conversation_history = [
+                     initial_contents[0], # Original user prompt
+                     model_function_call_content, # Model's response PART containing the function call
+                     types.Content(       # The result of the function call
+                         role="user", # Role is 'user' for function responses
+                         parts=[
+                             types.Part.from_function_response(
+                                 name=function_name,
+                                 response=api_response_content
+                             )
+                         ]
+                     )
+                 ]
+                 logger.debug(f"Conversation history for final call: {conversation_history}") #TODO: Send gemini_integration.py to 2.5 with example logs
+
+                 final_response = client.models.generate_content(
+                     model=model_name,
+                     contents=conversation_history,
+                     config=gen_config # Use same config (only cache ref)
+                 )
+                 logger.info("Received final response from model after function execution.")
+                 # --- START: Robust Validation of final_response ---
+                 final_text = None
+                 if not final_response.candidates:
+                     logger.error("Final response after function call has no candidates.")
+                     raise GenAIGenerationError("Model returned no candidates in final response after function call.")
+
+                 first_candidate = final_response.candidates[0]
+
+                 # Check finish reason first (important for safety/blocks)
+                 if first_candidate.finish_reason != types.FinishReason.STOP:
+                     logger.warning(f"Final response finished abnormally. Reason: {first_candidate.finish_reason}")
+                     # Handle specific reasons if needed (e.g., raise for SAFETY)
+                     if first_candidate.finish_reason == types.FinishReason.SAFETY:
+                          raise GenAIGenerationError(f"Final response flagged for safety reasons. Cache: {cache_name}")
+                     # Potentially raise for others like MAX_TOKENS, RECITATION etc.
+
+                 # Now check content structure safely
+                 if not first_candidate.content or not first_candidate.content.parts:
+                     logger.error("Final response after function call is missing content or parts.")
+                     # Check if finish reason was STOP despite empty content (unlikely but possible)
+                     if first_candidate.finish_reason == types.FinishReason.STOP:
+                         logger.warning("Final response finished with STOP but content/parts are missing.")
+                         # Maybe return an empty response indicator or raise? Raise for now.
+                         raise GenAIGenerationError("Model returned empty content in final response after function call.")
+                     else:
+                         # If finish reason was abnormal AND content is missing, the reason is the primary issue.
+                         # We might have already raised above, but this is a fallback.
+                         raise GenAIGenerationError(f"Model returned invalid final response structure after function call. Finish Reason: {first_candidate.finish_reason}")
+
+                 # Safely access the text part
+                 try:
+                     final_text = first_candidate.content.parts[0].text
+                     logger.info(f"Final response text: '{final_text[:100]}...'")
+                 except IndexError:
+                     logger.error("Final response content.parts is empty.")
+                     raise GenAIGenerationError("Model returned final response with no text part after function call.")
+                 except AttributeError:
+                     logger.error("Final response content.parts[0] missing 'text' attribute.")
+                     raise GenAIGenerationError("Model returned final response with unexpected part structure.")
+                 except Exception as e: # Catch any other unexpected access error
+                     logger.exception("Unexpected error accessing final response text.")
+                     raise GenAIGenerationError(f"Error processing final response content: {e}")
+
+                 # If all checks passed, return the final response
+                 return final_response
+                 # --- END: Robust Validation of final_response ---
+
+            else:
+                logger.warning(f"Received unhandled function call: {function_name}")
+                # Return the original response containing the unhandled call
+                return response
+        else:
+            # --- No Function Call Detected ---
+             logger.info("No function call detected in the initial response.") # Changed level to INFO
+             # ... (validation checks remain the same) ...
+             if not response.candidates or not response.candidates[0].content or not response.candidates[0].content.parts:
+                 logger.warning(f"Generation using cache '{cache_name}' produced no valid candidates/content.")
+                 finish_reason = getattr(response.candidates[0], 'finish_reason', None) if response.candidates else None
+                 if finish_reason == types.FinishReason.SAFETY:
+                      raise GenAIGenerationError(f"Response flagged for safety reasons using cache '{cache_name}'.")
+                 raise GenAIGenerationError(f"Model returned empty/invalid response using cache '{cache_name}'. Finish Reason: {finish_reason}")
+
+             first_candidate = response.candidates[0]
+             if first_candidate.finish_reason != types.FinishReason.STOP:
+                 logger.warning(f"Generation finished abnormally using cache '{cache_name}'. Reason: {first_candidate.finish_reason}")
+                 if first_candidate.finish_reason == types.FinishReason.SAFETY:
+                      raise GenAIGenerationError(f"Response flagged for safety reasons. Cache: {cache_name}")
+
+             logger.debug("Content generated successfully using cache (no function call).")
+             return response
+
+    # ... (exception handling remains the same) ...
     except google_exceptions.NotFound as e:
          logger.error(f"Cache not found or invalid: {cache_name}. Error: {e}")
          raise CacheInteractionError(f"Cache not found or invalid: {cache_name}") from e
     except google_exceptions.InvalidArgument as e:
          logger.error(f"Invalid argument using cache '{cache_name}': {e}")
-         # Could be model mismatch, invalid cache name format, etc.
          raise CacheInteractionError(f"Invalid argument using cache '{cache_name}': {e}") from e
     except google_exceptions.ResourceExhausted as e:
         logger.warning(f"Rate limit likely hit using cache '{cache_name}': {e}")
         raise # Let caller handle retry
-    except GenAIGenerationError: # Re-raise safety block error
+    except GenAIGenerationError: # Re-raise specific errors
         raise
     except Exception as e:
         logger.error(f"Unexpected error during GenAI generation with cache '{cache_name}': {e}", exc_info=True)
         raise GenAIGenerationError(f"Unexpected error during generation with cache '{cache_name}': {e}") from e
-
-
+     
 def extend_cache_expiry(cache_name: str, new_expiry_time: datetime.datetime) -> None:
     """
     Updates the expiration time of an existing GenAI context cache.

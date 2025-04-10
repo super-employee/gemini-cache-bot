@@ -2,8 +2,8 @@ import os
 import logging
 
 # For Local Development
-# from dotenv import load_dotenv # Make sure to pip install 'dotenv' if using this
-# load_dotenv()  # Load environment variables from .env file for local development
+from dotenv import load_dotenv # Make sure to pip install 'dotenv' if using this
+load_dotenv()  # Load environment variables from .env file for local development
 
 # --- Environment Variable Helper ---
 def get_env_variable(var_name, default=None, required=False):
@@ -58,6 +58,8 @@ CACHE_EXTENSION_THRESHOLD = int(get_env_variable("CACHE_EXTENSION_THRESHOLD", 30
 # Duration to extend the cache by (seconds)
 CACHE_EXTENSION_DURATION = int(get_env_variable("CACHE_EXTENSION_DURATION", 600))
 
+# --- External Services ---
+CALL_A_FRIEND_WEBHOOK_URL = get_env_variable("CALL_A_FRIEND_WEBHOOK_URL", required=True)
 
 # --- Perform startup checks for required variables ---
 # Calling get_env_variable with required=True handles this implicitly.
