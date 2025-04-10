@@ -129,10 +129,10 @@ def create_cache(
     display_name: Optional[str] = None
 ) -> str:
     """
-    Creates a new GenAI context cache including system instructions, data, and tools.
+    Creates a new GenAI context cache including system instructions, data, tools,
+    and forces the function calling mode to ANY.
     """
-    # ... (input validation for ttl, model_name) ...
-    # ... (model caching support check) ...
+    # ... (input validation, logging setup) ...
 
     ttl_str = f"{ttl_seconds}s"
     cache_display_name = display_name or f"cache-{model_name.split('/')[-1]}-{int(datetime.datetime.now(timezone.utc).timestamp())}"
@@ -143,38 +143,55 @@ def create_cache(
         logger.info(f"Including tools in cache: {tool_names}")
 
     try:
-        # Construct the config including system instruction, content, AND tools
+        # +++ START: Define ToolConfig for Forced Mode +++
+        forced_any_tool_config = None
+        if tools: # Only add tool_config if tools are actually provided
+            forced_any_tool_config = types.ToolConfig(
+                function_calling_config=types.FunctionCallingConfig(
+                    mode="any"
+                    # Optional: Restrict to specific function names if needed
+                    # allowed_function_names=[REQUEST_COLLEAGUE_HELP_DECLARATION.name]
+                )
+            )
+            logger.info("Applying ToolConfig with forced Mode.ANY during cache creation.")
+        else:
+            logger.info("No tools provided, ToolConfig will not be applied.")
+        # +++ END: Define ToolConfig for Forced Mode +++
+
+        # Construct the config including system instruction, content, tools, AND the forced tool_config
         cache_config = types.CreateCachedContentConfig(
             display_name=cache_display_name,
-            system_instruction=system_instruction, # <-- Pass system_instruction as a string
+            system_instruction=system_instruction,
             contents=[
                 types.Content(
-                    role="user", # <-- ADD role="user" here
+                    role="user",
                     parts=[types.Part(text=inventory_data)]
                 )
             ],
             ttl=ttl_str,
             tools=tools,
+            tool_config=forced_any_tool_config # <-- ADD the tool_config here
         )
-
-        # Debug log the config structure before sending (optional)
-        # logger.debug(f"Cache Config Payload: {cache_config}")
 
         created_cache = client.caches.create(
-            model=model_name, # Model ref needed for context
-            config=cache_config # Pass the complete config object
+            model=model_name,
+            config=cache_config
         )
 
-        # ... (logging success, token checks remain the same) ...
+        # ... (logging success, verification logs, token checks) ...
         logger.info(f"GenAI cache created successfully: Name='{created_cache.name}', DisplayName='{created_cache.display_name}'")
-        logger.info(f"Cache Usage Metadata: {created_cache.usage_metadata}")
-        min_tokens = 32768 # Or fetch dynamically if possible
-        cached_tokens = getattr(created_cache.usage_metadata, 'total_token_count', 0)
-        if cached_tokens < min_tokens:
-             logger.warning(f"Created cache '{created_cache.name}' has {cached_tokens} tokens, which is below the recommended minimum of {min_tokens}.")
-        elif cached_tokens == 0:
-             logger.error(f"Cache '{created_cache.name}' reported 0 cached tokens. Content might be empty or invalid.")
-             # raise CacheCreationError(f"Cache creation resulted in 0 cached tokens for {created_cache.name}.")
+        # Add verification log again to see if *this* makes tools appear
+        try:
+            cache_details = client.caches.get(name=created_cache.name)
+            has_tools = hasattr(cache_details, 'tools') and cache_details.tools is not None
+            tool_names_in_cache = []
+            if has_tools and cache_details.tools:
+                 tool_names_in_cache = [d.name for t in cache_details.tools for d in t.function_declarations]
+            logger.info(f"Verification (Forced ANY Mode) - Cache '{created_cache.name}' details: HasTools={has_tools}, ToolNames={tool_names_in_cache}")
+            cached_sys_instruction = getattr(cache_details, 'system_instruction', 'MISSING')
+            logger.info(f"Verification (Forced ANY Mode) - System Instruction in cache: '{str(cached_sys_instruction)[:100]}...'")
+        except Exception as verify_err:
+            logger.error(f"Failed to verify cache details immediately after creation (forced mode): {verify_err}")
 
 
         return created_cache.name
